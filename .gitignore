@@ -1,0 +1,17 @@
+# secrets and personal settings: never commit these
+settings.json
+settings_backup.json
+call_link.txt
+dashboard_v0_prompt.txt
+
+# recordings, test pictures and build leftovers
+*.npy
+test_*.png
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+
+crash_log.txt
+detector_backup_*.py

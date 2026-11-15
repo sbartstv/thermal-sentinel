@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thermal Sentinel SOC Dashboard</title>
+<style>
+  :root { --bg:#0a0a0a; --panel:#171717; --line:#2a2a2a; --text:#f5f5f5; --dim:#a3a3a3; --gold:#fbbf24; --green:#16a34a; --red:#b91c1c; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  main { max-width:1200px; margin:0 auto; padding:16px; }
+  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; border-bottom:2px solid var(--gold); padding-bottom:14px; }
+  h1 { margin:0; color:var(--gold); font-size:28px; letter-spacing:.5px; }
+  .sub { color:var(--dim); font-size:13px; margin-top:2px; }
+  .badge { border-radius:999px; padding:4px 12px; font-weight:700; font-size:13px; background:#404040; }
+  .badge.live { background:var(--green); }
+  .site { margin-top:20px; background:var(--panel); border-radius:14px; padding:18px; }
+  .site.fire { background:var(--red); animation:pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity:.75; } }
+  .row { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; align-items:baseline; }
+  h2 { margin:0; font-size:20px; }
+  .muted { color:var(--dim); font-size:13px; }
+  .state { margin-top:8px; font-size:18px; font-weight:800; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:10px; margin-top:14px; }
+  .card { background:rgba(0,0,0,.4); border-radius:10px; padding:12px; }
+  .card .k { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
+  .card .v { font-size:20px; font-weight:800; margin-top:4px; }
+  h3.sec { color:var(--gold); margin:28px 0 10px; font-size:18px; }
+  .alerts { list-style:none; padding:0; margin:0; display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:14px; }
+  .alert { background:var(--panel); border-radius:14px; padding:14px; }
+  .alert img { width:100%; border-radius:10px; margin-top:10px; display:block; }
+  .btn { display:inline-block; margin-top:10px; background:var(--gold); color:#000; font-weight:700; padding:8px 14px; border-radius:10px; text-decoration:none; }
+  .setup { background:var(--panel); border-radius:14px; padding:18px; margin-top:20px; }
+  code { background:#262626; padding:2px 6px; border-radius:6px; }
+  footer { margin-top:30px; color:#737373; font-size:12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>THERMAL SENTINEL</h1>
+      <div class="sub">SOC Security Operations Center / GSOC dashboard &middot; City of Glendale &middot; Jewel City Hacks 6.0 &middot; Voice agent powered by ElevenLabs</div>
+    </div>
+    <span id="badge" class="badge">CONNECTING</span>
+  </header>
+
+  <div id="setup" class="setup" hidden>
+    <h2>No sensor selected</h2>
+    <p class="muted">This dashboard shows one sensor's live feed. Open the link you were given by the sensor's owner; it ends in <code>#topic=...</code>.</p>
+  </div>
+
+  <section id="site" class="site">
+    <div class="row"><h2 id="siteName">Waiting for the sensor...</h2><span id="statusAge" class="muted"></span></div>
+    <div id="address" class="muted"></div>
+    <div id="state" class="state"></div>
+    <div id="cards" class="cards"></div>
+    <p id="fireStation" class="muted"></p>
+    <p id="hazards" class="muted"></p>
+  </section>
+
+  <h3 class="sec">Alerts</h3>
+  <p id="noAlerts" class="muted">No alerts in the last 6 hours.</p>
+  <ul id="alerts" class="alerts"></ul>
+
+  <footer>Thermal imaging shows heat only and cannot identify a person. If there is a fire or someone is in danger, call 911.
+    &middot; <a href="https://github.com/sbartstv/thermal-sentinel" style="color:#a3a3a3">Source on GitHub</a></footer>
+</main>
+<script>
+(function () {
+  // The sensor's channel comes from the link (#topic=...), so it isn't in the public code.
+  const topic = new URLSearchParams(location.hash.slice(1)).get("topic") || "";
+  const $ = (id) => document.getElementById(id);
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(topic)) { $("setup").hidden = false; $("site").hidden = true; return; }
+
+  const alerts = new Map();
+  let statusTime = 0;
+  const ago = (ms) => { const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    return s < 60 ? s + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago" : Math.round(s / 3600) + "h ago"; };
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+  function showStatus(s) {
+    $("siteName").textContent = s.site || "Sensor";
+    $("address").textContent = s.address || "";
+    const fire = s.fire_alert === "yes";
+    $("site").classList.toggle("fire", fire);
+    $("state").textContent = fire ? "FIRE ALERT" : "No fire alert";
+    const cards = [["People in view", s.people_in_view_now], ["People counted", s.people_counted_since_switched_on],
+      ["Hottest in view", s.hottest_in_view], ["Spot meter", s.spot_meter],
+      ["Camera inside", s.camera_internal_temperature], ["System", s.system]];
+    $("cards").replaceChildren(...cards.map(([k, v]) => { const c = el("div", "card"); c.append(el("div", "k", k), el("div", "v", v == null ? "-" : String(v))); return c; }));
+    $("fireStation").textContent = s.nearest_fire_station ? "Nearest fire station: " + s.nearest_fire_station : "";
+    $("hazards").textContent = s.hazards ? "Mapped hazard zones: " + s.hazards : "";
+  }
+
+  function showAlerts() {
+    const list = [...alerts.values()].sort((a, b) => b.time - a.time).slice(0, 50);
+    $("noAlerts").hidden = list.length > 0;
+    $("alerts").replaceChildren(...list.map((a) => {
+      const li = el("li", "alert");
+      const row = el("div", "row");
+      row.append(el("strong", "", a.title || "Alert"), el("span", "muted", new Date(a.time * 1000).toLocaleTimeString() + " · " + ago(a.time * 1000)));
+      li.append(row, el("div", "muted", a.message || ""));
+      if (a.attachment && /^https:\/\//.test(a.attachment.url)) { const img = el("img"); img.src = a.attachment.url; img.alt = "Thermal snapshot of the alert"; img.loading = "lazy"; li.append(img); }
+      if (a.click && /^https:\/\/elevenlabs\.io\//.test(a.click)) { const b = el("a", "btn", "Talk to the voice agent"); b.href = a.click; b.target = "_blank"; b.rel = "noreferrer"; li.append(b); }
+      return li;
+    }));
+  }
+
+  const es = new EventSource("https://ntfy.sh/" + topic + "," + topic + "-status/sse?since=6h");
+  es.onopen = () => { $("badge").textContent = "LIVE"; $("badge").classList.add("live"); };
+  es.onerror = () => { $("badge").textContent = "RECONNECTING"; $("badge").classList.remove("live"); };
+  es.onmessage = (e) => {
+    let m; try { m = JSON.parse(e.data); } catch { return; }
+    if (m.event !== "message") return;
+    if (m.topic === topic + "-status") { try { showStatus(JSON.parse(m.message)); statusTime = m.time * 1000; } catch {} }
+    else { alerts.set(m.id, m); showAlerts(); }
+  };
+  setInterval(() => { $("statusAge").textContent = statusTime ? "Readings from " + ago(statusTime) : ""; if (alerts.size) showAlerts(); }, 5000);
+})();
+</script>
+</body>
+</html>
